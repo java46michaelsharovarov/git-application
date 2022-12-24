@@ -64,12 +64,12 @@ public class GitRepositoryImpl implements GitRepository {
 
 	private String commitHeadNull(String commitMessage) {
 		Commit commit = createCommit(commitMessage, null);
-		createInternalBranch("master", commit);
+		createInternalBranch("master", commit.commitName);
 		return COMMIT_PERFORMED;
 	}
 
-	private void createInternalBranch(String branchName, Commit commit) {
-		Branch branch = new Branch(branchName, commit.commitName);
+	private void createInternalBranch(String branchName, String commitName) {
+		Branch branch = new Branch(branchName, commitName);
 		branches.put(branchName, branch);
 		head = branchName;
 	}
@@ -170,7 +170,7 @@ public class GitRepositoryImpl implements GitRepository {
 			res = BRANCH_ALREADY_EXISTS;
 		} else {
 			Commit commit = getCommit();
-			createInternalBranch(branchName, commit);
+			createInternalBranch(branchName, commit.commitName);
 			res = BRANCH_CREATED;
 		}
 		return res;
@@ -198,7 +198,7 @@ public class GitRepositoryImpl implements GitRepository {
 				branches.remove(branchName);
 				branches.put(newName, branch);
 				if (head.equals(branchName)) {
-					head = branchName;
+					head = newName;
 				}
 				res = BRANCH_RENAMED;
 			}
