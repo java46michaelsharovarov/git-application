@@ -4,11 +4,15 @@ import java.nio.file.*;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 import java.io.*;
 import telran.git.model.*;
 
 public class GitRepositoryImpl implements GitRepository {
 	
+	private static final String SWITCHED_SUCCESSFUL = "switched successful";
+	private static final String SWITCH_NO_SENSE = "switching to the current commit doesn’t make a sense";
+	private static final String SWITCH_ONLY_AFTER_COMMIT = "switchTo may be done only after commit";
 	private String gitPath;
 	private HashMap<String, Commit> commits;
 	private HashMap<Path, CommitFile> commitFiles;
@@ -262,8 +266,73 @@ public class GitRepositoryImpl implements GitRepository {
 
 	@Override
 	public String switchTo(String name) {
-		// Not implemented
+		if(isPresentUntrackedOrModified()) {
+			return SWITCH_ONLY_AFTER_COMMIT;
+		}
+		if(name.equals(head)) {
+			return SWITCH_NO_SENSE;
+		}
+		Branch branch;
+		Commit destCommit = commits.get(name);
+		if(destCommit == null) {
+			if((branch = branches.get(name)) == null) {
+				throw new IllegalArgumentException(name + " doesn't exist");
+			}
+			destCommit = commits.get(branch.commitName);
+		}
+		Commit initCommit = commits.get(branches.get(head).commitName);
+		List<CommitFile> initCommitFiles = initCommit.commitFiles.stream().toList();
+		List<CommitFile> destCommitFiles = destCommit.commitFiles.stream().toList();
+		destCommitFiles.forEach(cf -> extracted(initCommitFiles, cf));
+		head = name;
+		return SWITCHED_SUCCESSFUL;
+	}
+
+	private void extracted(List<CommitFile> initCommitFiles, CommitFile destCommitFile) {
+		if(initCommitFiles.contains(destCommitFile)) {
+			updatingFile(destCommitFile, initCommitFiles); 
+		} else {
+			creatFile(destCommitFile);
+//			deleteFile(destCommitFile.path);
+		}
+	}
+
+	private void creatFile(CommitFile destCommitFile) {
+		try {
+			Files.write(destCommitFile.path, destCommitFile.content);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private Object deleteFile(Path path) {
+		try {
+			Files.delete(path);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
 		return null;
+	}
+
+	private Object updatingFile(CommitFile destCommitFile, List<CommitFile> initCommitFiles) {
+		Instant destCommitFileTime = destCommitFile.modificationTime;
+		int initCommitFileIndex = initCommitFiles.indexOf(destCommitFile);
+		CommitFile initCommitFile = initCommitFiles.get(initCommitFileIndex);
+		Instant initCommitFileTime = initCommitFile.modificationTime;
+		if(initCommitFileTime.isAfter(destCommitFileTime)) {
+			List<String> content = destCommitFile.content;
+			try {
+				Files.write(destCommitFile.path, content);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+		return null;
+	}
+
+	private boolean isPresentUntrackedOrModified() {
+		List<Status> statuses = info().stream().map(fs -> fs.status).toList();
+		return statuses.contains(Status.UNTRACKED) || statuses.contains(Status.MODIFIED);
 	}
 
 	@Override

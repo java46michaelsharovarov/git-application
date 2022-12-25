@@ -20,10 +20,11 @@ import telran.git.service.*;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class GitRepositoryTest {
 
-	private static final String THIRD_COMMIT = "Third commit";
-	private static final String SECOND_COMMIT = "Second commit";
-	private static final String FIRST_COMMIT = "First commit";
-	private static final String HEW_CURRENT_BREANCH = "new_my_branch";
+	private static final String FOURTH_COMMIT = "fourth commit";
+	private static final String THIRD_COMMIT = "third commit";
+	private static final String SECOND_COMMIT = "second commit";
+	private static final String FIRST_COMMIT = "first commit";
+	private static final String HEW_CURRENT_BRANCH = "new_my_branch";
 	private static final String MASTER = "master";
 	private static final String MY_BRANCH = "my_branch";
 	private static final String NO_EXISTS = "no_exists";
@@ -97,7 +98,7 @@ class GitRepositoryTest {
 		Map<Path, Status> actual = gitRepository.info().stream().collect(Collectors.toMap(e -> e.path, e -> e.status));
 		assertEquals(Status.COMMITTED, actual.get(Path.of(FILE1))); 
 		assertEquals(Status.COMMITTED, actual.get(Path.of(FILE2))); 
-		Files.writeString(Path.of(FILE1), "Hello");
+		Files.writeString(Path.of(FILE1), "Hello File1");
 		Files.createFile(Path.of(FILE3));
 		actual = gitRepository.info().stream().collect(Collectors.toMap(e -> e.path, e -> e.status));
 		assertEquals(Status.MODIFIED, actual.get(Path.of(FILE1))); 
@@ -116,15 +117,15 @@ class GitRepositoryTest {
 	@Order(8)
 	@DisplayName("testing methods renameBranch, branches")
 	void renameBranchAndBranchesTest() throws Exception {
-		assertEquals(NO_EXISTS + " " + GitRepositoryImpl.BRANCH_NO_EXISTS, gitRepository.renameBranch(NO_EXISTS, HEW_CURRENT_BREANCH));
+		assertEquals(NO_EXISTS + " " + GitRepositoryImpl.BRANCH_NO_EXISTS, gitRepository.renameBranch(NO_EXISTS, HEW_CURRENT_BRANCH));
 		assertEquals(MASTER + " " + GitRepositoryImpl.BRANCH_ALREADY_EXISTS, gitRepository.renameBranch(MY_BRANCH, MASTER));
 		
 		List<String> expected = List.of(MY_BRANCH + "*", MASTER);
 		assertEquals(expected, gitRepository.branches());
 		
-		assertEquals(GitRepositoryImpl.BRANCH_RENAMED, gitRepository.renameBranch(MY_BRANCH, HEW_CURRENT_BREANCH));
+		assertEquals(GitRepositoryImpl.BRANCH_RENAMED, gitRepository.renameBranch(MY_BRANCH, HEW_CURRENT_BRANCH));
 		
-		expected = List.of(HEW_CURRENT_BREANCH + "*", MASTER);
+		expected = List.of(HEW_CURRENT_BRANCH + "*", MASTER);
 		assertEquals(expected, gitRepository.branches());
 	}
 	
@@ -132,9 +133,9 @@ class GitRepositoryTest {
 	@Order(9)
 	void deleteBranchTest() throws Exception {
 		assertEquals(GitRepositoryImpl.BRANCH_NO_EXISTS, gitRepository.deleteBranch(NO_EXISTS));
-		assertEquals(GitRepositoryImpl.ACTIVE_BRANCH, gitRepository.deleteBranch(HEW_CURRENT_BREANCH));
+		assertEquals(GitRepositoryImpl.ACTIVE_BRANCH, gitRepository.deleteBranch(HEW_CURRENT_BRANCH));
 		assertEquals(GitRepositoryImpl.BRANCH_DELETED, gitRepository.deleteBranch(MASTER));
-		List<String> expected = List.of(HEW_CURRENT_BREANCH + "*");
+		List<String> expected = List.of(HEW_CURRENT_BRANCH + "*");
 		assertEquals(expected, gitRepository.branches());
 	}
 	
@@ -150,6 +151,16 @@ class GitRepositoryTest {
 		actual = gitRepository.log().stream().map(e -> e.commitMessage).collect(Collectors.toList());
 		actual.sort(Comparator.naturalOrder());
 		assertIterableEquals(expected, actual);
+	}
+	
+	@Test
+	@Order(11)
+	void switchToTest() throws Exception {
+		gitRepository.createBranch(MASTER);
+		Files.writeString(Path.of(FILE3), "Hello File3");
+		gitRepository.commit(FOURTH_COMMIT);
+		String actual = gitRepository.switchTo(HEW_CURRENT_BRANCH);
+		System.out.println(actual);
 	}
 
 }
