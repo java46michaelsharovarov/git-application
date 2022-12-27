@@ -161,6 +161,7 @@ class GitRepositoryTest {
 		gitRepository.commit(FOURTH_COMMIT);
 		String actual = gitRepository.switchTo(HEW_CURRENT_BRANCH);
 		System.out.println(actual);
+		gitRepository.save();
 	}
 
 }

@@ -4,21 +4,17 @@ import java.nio.file.*;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.stream.Collectors;
 import java.io.*;
+
 import telran.git.model.*;
 
 public class GitRepositoryImpl implements GitRepository {
-	
-	private static final String SWITCHED_SUCCESSFUL = "switched successful";
-	private static final String SWITCH_NO_SENSE = "switching to the current commit doesn’t make a sense";
-	private static final String SWITCH_ONLY_AFTER_COMMIT = "switchTo may be done only after commit";
 	private String gitPath;
 	private HashMap<String, Commit> commits;
-	private HashMap<Path, CommitFile> commitFiles;
+	private HashMap<String, CommitFile> commitFiles;
 	private HashMap<String, Branch> branches;
 	private String head; // name of current branch or commit
-	private String ignoreExpressions = "(\\" + GIT_FILE + ")";
+	private String ignoreExpressions = "(\\..*)";
 
 	private static final long serialVersionUID = 1L;
 	public static final String COMMIT_PERFORMED = "Commit performed ";
@@ -34,7 +30,11 @@ public class GitRepositoryImpl implements GitRepository {
 	public static final String NO_HEAD = " No head yet";
 	public static final String BRANCH_NAME = " branch ";
 	public static final String COMMIT_NAME = " commit ";
-	public static final String WRONG_EXPRESSION = " Wrong regex";
+	public static final String SWITCHED = "Switched to ";
+	public static final String WRONG_COMMIT_NAME = "no commit with the name ";
+	public static final String SAME_AS_CURRENT = "The same commit as the current one";
+	public static final String DIRECTORY_NO_COMMITTED = "Run commit before switching";
+	private Instant lastCommitTimestamp;
 
 	private GitRepositoryImpl(Path git) {
 		this.gitPath = git.toString();
@@ -51,6 +51,7 @@ public class GitRepositoryImpl implements GitRepository {
 			res = restoreFromFile(git);
 		} else {
 			res = new GitRepositoryImpl(git.normalize());
+
 		}
 		return res;
 	}
@@ -64,45 +65,27 @@ public class GitRepositoryImpl implements GitRepository {
 	@Override
 	public String commit(String commitMessage) {
 		return head == null ? commitHeadNull(commitMessage) : commitHeadNoNull(commitMessage);
-	}	
-
-	private String commitHeadNull(String commitMessage) {
-		Commit commit = createCommit(commitMessage, null);
-		createInternalBranch("master", commit.commitName);
-		return COMMIT_PERFORMED;
-	}
-
-	private void createInternalBranch(String branchName, String commitName) {
-		Branch branch = new Branch(branchName, commitName);
-		branches.put(branchName, branch);
-		head = branchName;
 	}
 
 	private String commitHeadNoNull(String commitMessage) {
-		String res = null;
 		Branch branch = branches.get(head);
 		if (branch == null) {
-			res = COMMIT_NO_BRANCH;
-		} else {
-			Commit commit = createCommit(commitMessage, commits.get(branch.commitName));
-			branch.commitName = commit.commitName;
-			res = COMMIT_PERFORMED;
+			return COMMIT_NO_BRANCH;
 		}
-		return res;
+		Commit commit = createCommit(commitMessage, commits.get(branch.commitName));
+		branch.commitName = commit.commitName;
+		return COMMIT_PERFORMED;
 	}
 
 	private Commit createCommit(String message, Commit prev) {
-		String commitName = getCommitName();
-		Commit res = new Commit(commitName, message, prev, getCommitContent(commitName));
+		Commit res = new Commit();
+		res.commitName = getCommitName();
+		res.commitMessage = message;
+		res.prev = prev;
+		res.timestamp = Instant.now();
+		res.commitFiles = getCommitContent(res.commitName);
 		commits.put(res.commitName, res);
-		return res;
-	}
-
-	private String getCommitName() {
-		String res = "";
-		do {
-			res = Integer.toString(ThreadLocalRandom.current().nextInt(0x1000000, 0xfffffff), 16);
-		} while (commits.containsKey(res));
+		lastCommitTimestamp = res.timestamp;
 		return res;
 	}
 
@@ -120,9 +103,9 @@ public class GitRepositoryImpl implements GitRepository {
 			throw new RuntimeException(e.toString());
 		}
 		List<String> content = getFileContent(fs.path);
-		CommitFile res = new CommitFile(fs.path, timeModified, content, commitName);
+		CommitFile res = new CommitFile(fs.path.toString(), timeModified, content, commitName);
 		// Assumption neither rename nor delete
-		commitFiles.put(fs.path, res);
+		commitFiles.put(fs.path.toString(), res);
 		return res;
 	}
 
@@ -132,6 +115,31 @@ public class GitRepositoryImpl implements GitRepository {
 		} catch (IOException e) {
 			throw new RuntimeException(e.toString());
 		}
+	}
+
+	private String getCommitName() {
+		String res = "";
+		do {
+			res = Integer.toString(ThreadLocalRandom.current().nextInt(0x1000000, 0xfffffff), 16);
+		} while (commits.containsKey(res));
+		return res;
+	}
+
+	private String commitHeadNull(String commitMessage) {
+		Commit commit = createCommit(commitMessage, null);
+		createInternalBranch("master", commit);
+		return COMMIT_PERFORMED;
+	}
+
+	private void createInternalBranch(String branchName, Commit commit) {
+		if (branches.containsKey(branchName)) {
+			throw new IllegalStateException(String.format("Branch %s already exists", branchName));
+		}
+		Branch branch = new Branch();
+		branch.branchName = branchName;
+		branch.commitName = commit.commitName;
+		branches.put(branchName, branch);
+		head = branchName;
 	}
 
 	@Override
@@ -156,28 +164,26 @@ public class GitRepositoryImpl implements GitRepository {
 	}
 
 	private Status getStatus(Path p) throws IOException {
-		CommitFile commitFile = commitFiles.get(p);
+		CommitFile commitFile = commitFiles.get(p.toString());
 		return commitFile == null ? Status.UNTRACKED : getStatusFromCommitFile(commitFile, p);
 	}
 
 	private Status getStatusFromCommitFile(CommitFile commitFile, Path p) throws IOException {
-		return Files.getLastModifiedTime(p).toInstant().compareTo(commitFile.modificationTime) > 0 ? Status.MODIFIED
+		return Files.getLastModifiedTime(p).toInstant().compareTo(lastCommitTimestamp) > 0 ? Status.MODIFIED
 				: Status.COMMITTED;
 	}
 
 	@Override
 	public String createBranch(String branchName) {
-		String res = null;
 		if (commits.isEmpty()) {
-			res = NO_COMMITS;
-		} else if (branches.containsKey(branchName)) {
-			res = BRANCH_ALREADY_EXISTS;
-		} else {
-			Commit commit = getCommit();
-			createInternalBranch(branchName, commit.commitName);
-			res = BRANCH_CREATED;
-		}
-		return res;
+			return NO_COMMITS;
+		} 
+		if (branches.containsKey(branchName)) {
+			return BRANCH_ALREADY_EXISTS;
+		} 
+		Commit commit = getCommit();
+		createInternalBranch(branchName, commit);
+		return BRANCH_CREATED;
 	}
 
 	private Commit getCommit() {
@@ -192,54 +198,52 @@ public class GitRepositoryImpl implements GitRepository {
 
 	@Override
 	public String renameBranch(String branchName, String newName) {
-		String res = branchName + " " + BRANCH_NO_EXISTS;
-		Branch branch = branches.get(branchName);
-		if (branch != null) {
-			if (branches.containsKey(newName)) {
-				res = newName + " " + BRANCH_ALREADY_EXISTS;
-			} else {
-				branch.branchName = newName;
-				branches.remove(branchName);
-				branches.put(newName, branch);
-				if (head.equals(branchName)) {
-					head = newName;
-				}
-				res = BRANCH_RENAMED;
-			}
+		if (branches.containsKey(newName)) {
+			return newName + " " + BRANCH_ALREADY_EXISTS;
 		}
-		return res;
+		Branch branch = branches.get(branchName);
+		if (branch == null) {
+			return branchName + " " + BRANCH_NO_EXISTS;
+		}
+		branch.branchName = newName;
+		branches.remove(branchName);
+		branches.put(newName, branch);
+		if (head.equals(branchName)) {
+			head = newName;
+		}
+		return BRANCH_RENAMED;
 	}
 
 	@Override
 	public String deleteBranch(String branchName) {
-		String res = BRANCH_NO_EXISTS;
-		if (branches.containsKey(branchName)) {
-			if (head.equals(branchName)) {
-				res = ACTIVE_BRANCH;
-			} else if (branches.size() == 1) {
-				res = ONE_BRANCH;
-			} else {
-				branches.remove(branchName);
-				res = BRANCH_DELETED;
-			}
+		if (!branches.containsKey(branchName)) {
+			return BRANCH_NO_EXISTS;
 		}
-		return res;
+		if (head.equals(branchName)) {
+			return ACTIVE_BRANCH;
+		}
+		if (branches.size() == 1) {
+			return ONE_BRANCH;
+		}		
+		branches.remove(branchName);
+		return BRANCH_DELETED;
 	}
 
 	@Override
 	public List<CommitMessage> log() {
 		List<CommitMessage> res = new ArrayList<>();
-		if (head != null) {
-			Branch branch = branches.get(head);
-			String commitName = branch != null ? branch.commitName : head;
-			Commit commit = commits.get(commitName);
-			if (commit == null) {
-				throw new IllegalStateException("no commit with name " + commitName);
-			}
-			while (commit != null) {
-				res.add(new CommitMessage(commit.commitName, commit.commitMessage));
-				commit = commit.prev;
-			}
+		if (head == null) {
+			return res;
+		}
+		Branch branch = branches.get(head);
+		String commitName = branch != null ? branch.commitName : head;
+		Commit commit = commits.get(commitName);
+		if (commit == null) {
+			throw new IllegalStateException("no commit with name " + commitName);
+		}
+		while (commit != null) {
+			res.add(new CommitMessage(commit.commitName, commit.commitMessage));
+			commit = commit.prev;
 		}
 		return res;
 	}
@@ -261,88 +265,82 @@ public class GitRepositoryImpl implements GitRepository {
 		if (commit == null) {
 			throw new IllegalArgumentException(commitName + " doesn't exist");
 		}
-		return commit.commitFiles.stream().map(cf -> cf.path).toList();
+		return commit.commitFiles.stream().map(cf -> Path.of(cf.path)).toList();
 	}
 
 	@Override
 	public String switchTo(String name) {
-		if(isPresentUntrackedOrModified()) {
-			return SWITCH_ONLY_AFTER_COMMIT;
-		}
-		if(name.equals(head)) {
-			return SWITCH_NO_SENSE;
-		}
-		Branch branch;
-		Commit destCommit = commits.get(name);
-		if(destCommit == null) {
-			if((branch = branches.get(name)) == null) {
-				throw new IllegalArgumentException(name + " doesn't exist");
-			}
-			destCommit = commits.get(branch.commitName);
-		}
-		Commit initCommit = commits.get(branches.get(head).commitName);
-		List<CommitFile> initCommitFiles = initCommit.commitFiles.stream().toList();
-		List<CommitFile> destCommitFiles = destCommit.commitFiles.stream().toList();
-		destCommitFiles.forEach(cf -> extracted(initCommitFiles, cf));
-		head = name;
-		return SWITCHED_SUCCESSFUL;
-	}
-
-	private void extracted(List<CommitFile> initCommitFiles, CommitFile destCommitFile) {
-		if(initCommitFiles.contains(destCommitFile)) {
-			updatingFile(destCommitFile, initCommitFiles); 
-		} else {
-			creatFile(destCommitFile);
-//			deleteFile(destCommitFile.path);
-		}
-	}
-
-	private void creatFile(CommitFile destCommitFile) {
-		try {
-			Files.write(destCommitFile.path, destCommitFile.content);
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-	}
-
-	private Object deleteFile(Path path) {
-		try {
-			Files.delete(path);
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-		return null;
-	}
-
-	private Object updatingFile(CommitFile destCommitFile, List<CommitFile> initCommitFiles) {
-		Instant destCommitFileTime = destCommitFile.modificationTime;
-		int initCommitFileIndex = initCommitFiles.indexOf(destCommitFile);
-		CommitFile initCommitFile = initCommitFiles.get(initCommitFileIndex);
-		Instant initCommitFileTime = initCommitFile.modificationTime;
-		if(initCommitFileTime.isAfter(destCommitFileTime)) {
-			List<String> content = destCommitFile.content;
-			try {
-				Files.write(destCommitFile.path, content);
-			} catch (IOException e) {
-				e.printStackTrace();
+		List<FileState> fileStates = info();
+		String res = SWITCHED + name;
+		Commit commitTo = commitSwitched(name);
+		Commit commitHead = getCommit();
+		if (commitTo != null) {
+			if (head.equals(name) || commitTo.commitName.equals(commitHead.commitName)) {
+				res = name + SAME_AS_CURRENT;
+			} else if (fileStates.stream().anyMatch(fs -> fs.status != Status.COMMITTED)) {
+				res = DIRECTORY_NO_COMMITTED;
+			} else {
+				info().stream().forEach(fs -> {
+					try {
+						Files.delete(fs.path);
+					} catch (IOException e) {
+						throw new IllegalStateException("error in deleting files " + e.getMessage());
+					}
+				});
+				switchProcess(commitTo);
+				head = name;
+				lastCommitTimestamp = Instant.now();
 			}
 		}
-		return null;
+		return res;
 	}
 
-	private boolean isPresentUntrackedOrModified() {
-		List<Status> statuses = info().stream().map(fs -> fs.status).toList();
-		return statuses.contains(Status.UNTRACKED) || statuses.contains(Status.MODIFIED);
+	private void writeFile(CommitFile cf) {
+		try (PrintWriter writer = new PrintWriter(cf.path)) {
+			cf.content.stream().forEach(writer::println);
+		} catch (Exception e) {
+			throw new IllegalStateException(e.toString());
+		}
+	}
+
+	private void switchProcess(Commit commitTo) {
+		// With assumption files are not removed from working directory
+		Set<String> restoredFiles = new HashSet<>();
+		try {
+			while (commitTo != null) {
+				commitTo.commitFiles.stream().forEach(cf -> {
+					if (!restoredFiles.contains(cf.path)) {
+						writeFile(cf);
+						restoredFiles.add(cf.path);
+					}
+				});
+				commitTo = commitTo.prev;
+			}
+		} catch (Exception e) {
+			throw new IllegalStateException("error in switchForward functionality ");
+		}
+	}
+
+	private Commit commitSwitched(String name) {
+		Commit res = null;
+		String commitName = name;
+		Branch branch = branches.get(name);
+		if (branch != null) {
+			commitName = branch.commitName;
+		}
+		res = commits.get(commitName);
+		if (res == null) {
+			throw new IllegalArgumentException(WRONG_COMMIT_NAME + commitName);
+		}
+		return res;
 	}
 
 	@Override
 	public String getHead() {
-		String res = NO_HEAD;
-		if (head != null) {
-			res = branches.containsKey(head) ? BRANCH_NAME : COMMIT_NAME;
-			res += head;
+		if (head == null) {
+			return NO_HEAD;
 		}
-		return res;
+		return (branches.containsKey(head) ? BRANCH_NAME : COMMIT_NAME) + head;
 	}
 
 	@Override
@@ -356,17 +354,8 @@ public class GitRepositoryImpl implements GitRepository {
 
 	@Override
 	public String addIgnoredFileNameExp(String regex) {
-		checkRegex(regex);
 		ignoreExpressions += String.format("|(%s)", regex);
 		return String.format("Regex for files ignored is %s", ignoreExpressions);
-	}
-
-	private void checkRegex(String regex) {
-		try {
-			"test".matches(regex);
-		} catch (Exception e) {
-			throw new IllegalArgumentException(regex + WRONG_EXPRESSION);
-		}
 	}
 
 }
